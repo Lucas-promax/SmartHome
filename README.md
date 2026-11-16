@@ -17,6 +17,13 @@ SmartHome 是一个前后端分离的智能家居管理项目，提供设备控�
 
 ## Windows 启动
 
+运行所需的 YOLO `.pt` 和 `buffalo_l/*.onnx` 模型通过 Git LFS 纳入版本控制。安装 Git LFS 后，在克隆或拉取项目时执行以下命令，获取完整权重：
+
+```powershell
+git lfs install
+git lfs pull
+```
+
 在项目根目录执行以下命令，准备 Python 虚拟环境并安装依赖：
 
 ```powershell
@@ -28,7 +35,7 @@ npm.cmd --prefix frontend install
 
 启动后访问前端 `http://127.0.0.1:3001`，后端 API 文档位于 `http://127.0.0.1:8000/docs`。也可运行 `start.cmd` 启动服务。
 
-硬件连接和智能助手参数可在界面中配置；视觉识别所需模型需另外放置于 `backend/models/`。本地数据库、模型和运行数据不纳入版本控制。
+硬件连接和智能助手参数可在界面中配置；视觉识别模型位于 `backend/models/`。旧权重、训练中间产物、本地数据库和运行数据不纳入版本控制。
 
 ## OrangePi AIpro 部署
 

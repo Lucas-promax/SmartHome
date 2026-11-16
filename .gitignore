@@ -52,8 +52,7 @@ coverage/
 *.sqlite3-shm
 *.log
 
-# Local models, datasets and training artifacts
-/backend/models/
+# Local datasets and generated training artifacts
 /models/
 /datasets/
 /data/
@@ -65,6 +64,23 @@ coverage/
 *.pth
 *.onnx
 *.engine
+
+# Track runtime models explicitly; keep old weights and export caches local.
+/backend/models/*
+!/backend/models/best.pt
+!/backend/models/yolov8s.pt
+!/backend/models/yolov8n.pt
+!/backend/models/buffalo_l/
+/backend/models/buffalo_l/*
+!/backend/models/buffalo_l/1k3d68.onnx
+!/backend/models/buffalo_l/2d106det.onnx
+!/backend/models/buffalo_l/det_10g.onnx
+!/backend/models/buffalo_l/genderage.onnx
+!/backend/models/buffalo_l/w600k_r50.onnx
+# Allow the board's compiled runtime models when copied into this checkout.
+!/backend/models/best.om
+!/backend/models/best.names
+!/backend/models/yolov8s.om
 
 # Editor and OS temporary files
 .idea/
