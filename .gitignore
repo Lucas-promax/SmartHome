@@ -1,0 +1,76 @@
+# Local documentation and hardware reference files
+/docs/
+/.docs/
+/.hardware/
+/.temp/
+/.train/
+
+# Local runtimes and machine-specific configuration
+/.tools/
+/.venv/
+/venv/
+/conda_envs/
+/.agents/
+/.codex/
+/.aws/
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+
+# Frontend dependencies and generated output (keep package-lock.json)
+node_modules/
+/frontend/dist/
+.vite/
+.npm-cache/
+
+# Python caches and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# Runtime databases, face photos, snapshots and assistant history
+/backend/database/
+/backend/agent/conversations/
+/backend/logs/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+
+# Local models, datasets and training artifacts
+/backend/models/
+/models/
+/datasets/
+/data/
+/face_recog/
+/yolo_infer/
+/yolo_train/
+/runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Editor and OS temporary files
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

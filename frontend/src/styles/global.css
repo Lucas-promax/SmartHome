@@ -1,0 +1,127 @@
+/* ============================================================
+   DnB26 智能家居控制台 - 全局样式
+   支持浅色/深色主题切换，电脑/手机自适应
+   ============================================================ */
+
+/* CSS 变量：浅色主题（默认） */
+:root {
+  --bg-primary: #f0f2f5;
+  --bg-card: #ffffff;
+  --bg-sidebar: #1a1a2e;
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-muted: #909399;
+  --border-color: #e4e7ed;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  --header-bg: #ffffff;
+  --accent: #409eff;
+  --danger: #f56c6c;
+  --warning: #e6a23c;
+  --success: #67c23a;
+  --sidebar-text: #e0e0e0;
+  --sidebar-active: #409eff;
+}
+
+/* 深色主题 */
+html.dark {
+  --bg-primary: #1a1a2e;
+  --bg-card: #16213e;
+  --bg-sidebar: #0f3460;
+  --text-primary: #e0e0e0;
+  --text-secondary: #b0b0b0;
+  --text-muted: #808080;
+  --border-color: #2a2a4a;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --header-bg: #16213e;
+  --accent: #409eff;
+  --danger: #f56c6c;
+  --warning: #e6a23c;
+  --success: #67c23a;
+  --sidebar-text: #c0c0c0;
+  --sidebar-active: #409eff;
+}
+
+/* 基础重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background 0.3s, color 0.3s;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
+}
+
+/* 卡片通用样式 */
+.dashboard-card {
+  background: var(--bg-card);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border-color);
+}
+
+/* 响应式布局辅助 */
+@media (max-width: 768px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+  .dashboard-card {
+    padding: 10px;
+    border-radius: 6px;
+  }
+}
+
+/* 告警动画 */
+@keyframes alert-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.alert-animation {
+  animation: alert-pulse 1s infinite;
+}
+
+/* 状态指示灯 */
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.status-dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.status-dot.offline { background: var(--danger); }
+.status-dot.warning { background: var(--warning); animation: alert-pulse 1s infinite; }
+
+/* 页面容器 */
+.page-container {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* 过渡动画 */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
