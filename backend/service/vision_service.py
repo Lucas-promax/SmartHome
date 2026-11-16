@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -54,16 +55,19 @@ async def save_snapshot(file: UploadFile, mode: str = "snapshot") -> dict[str, A
 async def detect(file: UploadFile, mode: str) -> dict[str, Any]:
     snapshot = await save_snapshot(file, mode)
     image_path = BACKEND_ROOT / snapshot["image_path"]
-    model_path = FIRE_DRONE_MODEL if mode == "fire_drone" else GENERAL_MODEL
+    if os.getenv("SMARTHOME_VISION_BACKEND") == "om":
+        from service.ascend_yolo import _detect_with_om
+        detections, image_width, image_height = _detect_with_om(mode, image_path)
+    else:
+        model_path = FIRE_DRONE_MODEL if mode == "fire_drone" else GENERAL_MODEL
+        if not model_path.exists():
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"模型文件不存在: {model_path}")
 
-    if not model_path.exists():
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"模型文件不存在: {model_path}")
-
-    model = _load_yolo_model(mode, model_path)
-    results = model(source=str(image_path), conf=0.35, verbose=False)
-    result = results[0] if results else None
-    image_height, image_width = _get_result_shape(result)
-    detections = _parse_yolo_detections(result, model, image_width, image_height)
+        model = _load_yolo_model(mode, model_path)
+        results = model(source=str(image_path), conf=0.35, verbose=False)
+        result = results[0] if results else None
+        image_height, image_width = _get_result_shape(result)
+        detections = _parse_yolo_detections(result, model, image_width, image_height)
 
     result = {
         "mode": mode,
@@ -148,6 +152,9 @@ async def face_recognize(file: UploadFile) -> dict[str, Any]:
 def get_model_status() -> dict[str, Any]:
     return {
         "model_root": MODEL_ROOT.as_posix(),
+        "vision_backend": os.getenv("SMARTHOME_VISION_BACKEND", "ultralytics"),
+        "fire_drone_om_model": (MODEL_ROOT / "best.om").exists(),
+        "general_om_model": (MODEL_ROOT / "yolov8s.om").exists(),
         "fire_drone_model": FIRE_DRONE_MODEL.exists(),
         "general_model": GENERAL_MODEL.exists(),
         "general_light_model": GENERAL_LIGHT_MODEL.exists(),

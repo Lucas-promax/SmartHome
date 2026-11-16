@@ -1,0 +1,16 @@
+[Unit]
+Description=SmartHome frontend and backend for %i (OrangePi)
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+SupplementaryGroups=dialout
+ExecStart=/usr/bin/bash /home/%i/SmartHome/deploy/current/deploy/orangepi/run.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

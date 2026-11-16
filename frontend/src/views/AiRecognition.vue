@@ -469,13 +469,11 @@ function boxStyle(detection) {
   const sourceW = detection.image_width || 640
   const sourceH = detection.image_height || 480
   const [x, y, w, h] = detection.bbox || [0, 0, 0, 0]
-  const scaleX = snapshotSize.value.width / sourceW
-  const scaleY = snapshotSize.value.height / sourceH
   return {
-    left: `${x * scaleX}px`,
-    top: `${y * scaleY}px`,
-    width: `${w * scaleX}px`,
-    height: `${h * scaleY}px`,
+    left: `${x / sourceW * 100}%`,
+    top: `${y / sourceH * 100}%`,
+    width: `${w / sourceW * 100}%`,
+    height: `${h / sourceH * 100}%`,
     borderColor: progressColor(detection.class)
   }
 }
@@ -645,16 +643,19 @@ function progressColor(className) {
 }
 .snapshot-preview {
   position: relative;
-  width: 100%;
-  max-height: 420px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
   overflow: hidden;
   background: #050608;
   border-radius: 8px;
 }
 .snapshot-preview img {
   display: block;
-  width: 100%;
+  width: auto;
   height: auto;
+  max-width: 100%;
+  max-height: 420px;
 }
 .snapshot-box {
   position: absolute;

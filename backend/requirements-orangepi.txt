@@ -1,0 +1,11 @@
+# ARM64 / Ascend runtime. The system image supplies acl and the CANN libraries.
+# Reuse the board's Conda Python environment; do not install Windows torch pins.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+numpy==1.26.4
+opencv-python==4.10.0.84
+insightface==1.0.1
+onnxruntime==1.23.2
+pyserial==3.5
