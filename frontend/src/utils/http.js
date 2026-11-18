@@ -11,8 +11,12 @@
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api'
 
-// 摄像头板使用独立串口，与家居主控连接分开。
+// 板端 USB 和 OV7670 共用会话、帧读取与关闭接口。
 export const cameraApi = {
+  usbDevices: () => request('/camera/usb/devices'),
+  connectUsb: (device) => request('/camera/usb/connect', {
+    method: 'POST', body: JSON.stringify({ device })
+  }),
   ports: () => request('/camera/ports'),
   connect: (port, baudrate) => request('/camera/connect', {
     method: 'POST', body: JSON.stringify({ port, baudrate })
@@ -98,23 +102,41 @@ async function streamRequest(url, payload, onEvent) {
     throw new Error(message)
   }
   if (!response.body) throw new Error('浏览器不支持流式响应')
+  if (!response.headers.get('Content-Type')?.toLowerCase().startsWith('text/event-stream')) {
+    throw new Error('助手接口未返回流式响应，请检查后端服务或网络连接')
+  }
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const chunks = buffer.split('\n\n')
-    buffer = chunks.pop() || ''
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find(item => item.startsWith('data:'))
-      if (!line) continue
-      const event = JSON.parse(line.slice(5).trim())
-      await onEvent(event)
-      if (event.type === 'error') throw new Error(event.message || 'Agent 请求失败')
+  let terminalEvent = false
+  async function dispatch(chunk) {
+    const data = chunk.split('\n').filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trimStart()).join('\n')
+    if (!data) return
+    const event = JSON.parse(data)
+    await onEvent(event)
+    if (event.type === 'error') throw new Error(event.message || 'Agent 请求失败')
+    if (['done', 'confirm_required', 'client_tool_request'].includes(event.type)) terminalEvent = true
+  }
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
+      const chunks = buffer.split('\n\n')
+      buffer = chunks.pop() || ''
+      for (const chunk of chunks) await dispatch(chunk)
+      if (terminalEvent) return
+      if (done) {
+        if (buffer.trim()) await dispatch(buffer)
+        if (!terminalEvent) throw new Error('助手连接提前结束，未收到完整回复，请重试')
+        return
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }
 

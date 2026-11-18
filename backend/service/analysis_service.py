@@ -18,9 +18,10 @@ def _parse_time(value: str | None) -> datetime | None:
         return None
 
 
-def _default_range(after: str | None, before: str | None) -> tuple[datetime, datetime]:
+def _default_range(after: str | None, before: str | None, window_seconds: int | None = None) -> tuple[datetime, datetime]:
     before_dt = _parse_time(before) or datetime.now().astimezone()
-    after_dt = _parse_time(after) or (before_dt - timedelta(hours=DEFAULT_WINDOW_HOURS))
+    window = timedelta(seconds=window_seconds) if window_seconds else timedelta(hours=DEFAULT_WINDOW_HOURS)
+    after_dt = _parse_time(after) or (before_dt - window)
     if after_dt >= before_dt:
         after_dt = before_dt - timedelta(hours=DEFAULT_WINDOW_HOURS)
     return after_dt, before_dt
@@ -263,13 +264,19 @@ def vision(after: str | None = None, before: str | None = None, bucket_seconds: 
     return {"mode_counts": mode_counts, "object_counts": object_counts, "timeline": list(timeline.values())[-MAX_BUCKETS:], "recent_logs": list(reversed(logs))[:20], "bucket_seconds": bucket}
 
 
-def overview(after: str | None = None, before: str | None = None, bucket_seconds: int | None = None) -> dict[str, Any]:
+def overview(after: str | None = None, before: str | None = None, bucket_seconds: int | None = None,
+             window_seconds: int | None = None) -> dict[str, Any]:
+    # Relative presets use the clock that timestamps the records. Resolve once
+    # so all charts share exactly the same boundaries, even across a second tick.
+    after_dt, before_dt = _default_range(after, before, window_seconds)
+    after, before = _range_sql(after_dt, before_dt)
     sensor_data = sensors(after, before, bucket_seconds)
     device_data = devices(after, before, bucket_seconds)
     access_data = access(after, before, bucket_seconds)
     vision_data = vision(after, before, bucket_seconds)
     return {
         "summary": summary(),
+        "server_time": datetime.now().astimezone().isoformat(timespec="seconds"),
         "sensors": sensor_data,
         "devices": device_data,
         "access": access_data,

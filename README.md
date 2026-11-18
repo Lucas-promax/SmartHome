@@ -61,7 +61,9 @@ powershell -ExecutionPolicy Bypass -File .\deploy\orangepi\connect.ps1
 
 两块 Arduino 都连接到板子：家居主控使用独立串口（9600 波特率），外置 OV7670 摄像头经另一块 Arduino 使用第二个串口。在硬件设置中选择主控串口，在 AI 识别页选择 OV7670 及其串口和匹配固件的波特率，两者不能使用同一串口。使用这一路摄像头时不依赖 PC 摄像头。
 
-开机自启模板为 `deploy/orangepi/smarthome@.service`，服务以普通用户运行并附加 `dialout` 串口权限：
+插在香橙派上的 USB 摄像头由后端通过 V4L2/OpenCV 采集，网页设备列表显示为“板端 USB”，默认优先选择板端摄像头。点击“开启摄像头”后即可预览、拍照并用于 AI 识别，无需电脑浏览器的摄像头权限。“本机”选项仍使用打开网页的电脑摄像头；OV7670 继续使用独立串口。各板端摄像头共用一个采集会话，切换或关闭时会释放原设备。
+
+开机自启模板为 `deploy/orangepi/smarthome@.service`，服务以普通用户运行并附加 `dialout` 串口权限和 `video` 摄像头权限。已有部署更新模板后需执行 `sudo systemctl daemon-reload` 并重启服务，使新权限生效：
 
 ```bash
 sudo systemctl status smarthome@HwHiAiUser

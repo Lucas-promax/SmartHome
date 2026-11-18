@@ -38,6 +38,10 @@
       </div>
     </div>
 
+    <div v-if="queryRangeLabel" class="query-range">查询范围：{{ queryRangeLabel }}</div>
+    <el-alert v-if="clockMismatch" type="warning" :closable="false" show-icon
+      title="板端时间与本机时间不一致，快捷范围已按板端时间查询；自定义范围请按记录时间选择。" />
+
     <el-row :gutter="16" class="summary-row">
       <el-col v-for="item in summaryCards" :key="item.label" :xs="12" :sm="8" :lg="4">
         <div class="metric-card dashboard-card">
@@ -138,13 +142,8 @@ function rangeParams() {
   if (customRange.value && customRange.value.length === 2) {
     return { after: customRange.value[0], before: customRange.value[1] }
   }
-  const now = new Date()
-  const start = new Date(now)
-  if (timeRange.value === '30m') start.setMinutes(now.getMinutes() - 30)
-  else if (timeRange.value === '6h') start.setHours(now.getHours() - 6)
-  else if (timeRange.value === '24h') start.setHours(now.getHours() - 24)
-  else start.setDate(now.getDate() - 7)
-  return { after: start.toISOString(), before: now.toISOString() }
+  const windows = { '30m': 1800, '6h': 21600, '24h': 86400, '7d': 604800 }
+  return { window_seconds: windows[timeRange.value] || windows['6h'] }
 }
 
 async function loadData() {
@@ -164,10 +163,8 @@ function onRangeChange() {
 }
 
 function onCustomRange(val) {
-  if (val) {
-    timeRange.value = ''
-    loadData()
-  }
+  timeRange.value = val ? '' : '6h'
+  loadData()
 }
 
 function refreshCharts() {
@@ -180,6 +177,18 @@ const bucketLabel = computed(() => {
   if (seconds < 60) return `${seconds}秒`
   if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`
   return `${Math.round(seconds / 3600)}小时`
+})
+
+const queryRangeLabel = computed(() => {
+  const range = analysis.value.range
+  if (!range?.after || !range?.before) return ''
+  const format = value => new Date(value).toLocaleString('zh-CN', { hour12: false })
+  return `${format(range.after)} 至 ${format(range.before)}`
+})
+
+const clockMismatch = computed(() => {
+  const serverTime = Date.parse(analysis.value.server_time)
+  return Number.isFinite(serverTime) && Math.abs(Date.now() - serverTime) > 5 * 60 * 1000
 })
 
 const summaryCards = computed(() => [
@@ -387,6 +396,10 @@ function formatSource(row, column, value) {
   flex-wrap: wrap;
 }
 .bucket-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.query-range {
   color: var(--text-secondary);
   font-size: 13px;
 }

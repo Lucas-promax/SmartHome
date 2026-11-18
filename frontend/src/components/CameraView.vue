@@ -1,6 +1,6 @@
 <!--
   CameraView.vue - 摄像头实时视频窗口
-  USB 使用浏览器采集；OV7670 使用后端独立串口解码，截图接口保持一致。
+  板端 USB / OV7670 从后端取帧，本机摄像头由浏览器采集，截图接口保持一致。
 -->
 <template>
   <div class="camera-container" :style="{ width: width, height: height }">
@@ -15,8 +15,8 @@
     </div>
 
     <div class="camera-viewport" ref="viewportRef">
-      <video v-show="!serialSource" ref="videoRef" class="camera-video" autoplay muted playsinline></video>
-      <img v-if="serialSource && serialImage" :src="serialImage" class="camera-video" alt="OV7670 摄像头画面" />
+      <video v-show="!backendSource" ref="videoRef" class="camera-video" autoplay muted playsinline></video>
+      <img v-if="backendSource && serialImage" :src="serialImage" class="camera-video" alt="板端摄像头画面" />
 
       <canvas
         ref="canvasRef"
@@ -28,7 +28,7 @@
       <div v-if="serialSource && serialImage" class="receive-progress">
         接收 {{ serialProgress }}% · {{ cameraEnabled ? '拍照取最近完整帧' : '等待完整帧后可拍照' }}
       </div>
-      <div v-if="!cameraEnabled && !(serialSource && serialImage)" class="camera-placeholder">
+      <div v-if="!cameraEnabled && !(backendSource && serialImage)" class="camera-placeholder">
         <el-icon :size="48"><VideoCamera /></el-icon>
         <p>{{ errorMessage || '摄像头未开启' }}</p>
       </div>
@@ -39,15 +39,18 @@
         v-model="selectedCameraId"
         class="camera-select"
         aria-label="选择摄像头"
-        placeholder="默认摄像头（首次开启后显示名称）"
+        placeholder="选择摄像头"
         :disabled="starting"
         @change="changeCamera"
       >
-        <el-option label="默认摄像头" value="" />
+        <el-option v-for="entry in boardCameras" :key="`board-usb:${entry.device}`"
+          :label="`板端 USB · ${entry.name} · ${entry.device}${entry.accessible ? '' : '（无访问权限）'}`"
+          :value="`board-usb:${entry.device}`" />
+        <el-option label="本机默认摄像头" value="" />
         <el-option
           v-for="(camera, index) in cameras"
           :key="camera.deviceId"
-          :label="camera.label || `摄像头 ${index + 1}`"
+          :label="`本机 · ${camera.label || `摄像头 ${index + 1}`}`"
           :value="camera.deviceId"
         />
         <el-option v-for="entry in serialPorts" :key="`ov7670:${entry.port}`"
@@ -116,8 +119,11 @@ const errorMessage = ref('')
 const cameras = ref([])
 const selectedCameraId = ref('')
 const serialPorts = ref([])
+const boardCameras = ref([])
 const baudrate = ref(500000)
 const serialSource = computed(() => selectedCameraId.value.startsWith('ov7670:'))
+const boardUsbSource = computed(() => selectedCameraId.value.startsWith('board-usb:'))
+const backendSource = computed(() => serialSource.value || boardUsbSource.value)
 const serialRunning = ref(false)
 const serialImage = ref('')
 const serialProgress = ref(0)
@@ -132,6 +138,7 @@ let serialFrameAt = 0
 let serialPreviewId = 0
 let serialCapture = null
 let operation = 0
+let cameraSelectionMade = false
 
 onMounted(() => {
   updateCanvasSize()
@@ -167,8 +174,21 @@ function updateCanvasSize() {
 }
 
 async function refreshCameras() {
-  // USB 权限/枚举失败不应阻止后端串口设备选择。
-  await Promise.all([refreshUsbCameras(), refreshSerialPorts()])
+  // 各路设备独立枚举；浏览器不支持采集时也能使用板端摄像头。
+  await Promise.all([refreshUsbCameras(), refreshSerialPorts(), refreshBoardCameras()])
+}
+
+async function refreshBoardCameras() {
+  try {
+    const devices = await cameraApi.usbDevices()
+    if (disposed) return
+    boardCameras.value = devices
+    if (!cameraSelectionMade && !selectedCameraId.value && !stream && !starting.value && devices.length) {
+      selectedCameraId.value = `board-usb:${devices[0].device}`
+    }
+  } catch {
+    if (!disposed) boardCameras.value = []
+  }
 }
 
 async function refreshSerialPorts() {
@@ -187,7 +207,7 @@ async function refreshUsbCameras() {
     const devices = await navigator.mediaDevices.enumerateDevices()
     if (disposed) return
     cameras.value = devices.filter(device => device.kind === 'videoinput' && device.deviceId)
-    if (selectedCameraId.value && !serialSource.value && !cameras.value.some(camera => camera.deviceId === selectedCameraId.value)) {
+    if (selectedCameraId.value && !backendSource.value && !cameras.value.some(camera => camera.deviceId === selectedCameraId.value)) {
       selectedCameraId.value = ''
     }
   } catch {
@@ -196,12 +216,13 @@ async function refreshUsbCameras() {
 }
 
 function changeCamera() {
+  cameraSelectionMade = true
   if (cameraEnabled.value || serialRunning.value) startCamera()
 }
 
 async function startCamera() {
   if (starting.value || disposed) return
-  if (!serialSource.value && !navigator.mediaDevices?.getUserMedia) {
+  if (!backendSource.value && !navigator.mediaDevices?.getUserMedia) {
     errorMessage.value = '当前浏览器不支持摄像头调用'
     return
   }
@@ -213,8 +234,10 @@ async function startCamera() {
   try {
     await stopping
     if (disposed || currentOperation !== operation) return
-    if (serialSource.value) {
-      const result = await cameraApi.connect(selectedCameraId.value.slice('ov7670:'.length), baudrate.value)
+    if (backendSource.value) {
+      const result = boardUsbSource.value
+        ? await cameraApi.connectUsb(selectedCameraId.value.slice('board-usb:'.length))
+        : await cameraApi.connect(selectedCameraId.value.slice('ov7670:'.length), baudrate.value)
       if (disposed || currentOperation !== operation) {
         await cameraApi.disconnect(result.session)
         return
@@ -263,7 +286,7 @@ async function startCamera() {
     stopCamera()
     errorMessage.value = e?.name === 'NotAllowedError'
       ? '摄像头权限被拒绝'
-      : (serialSource.value ? `摄像头连接失败：${e.message}` : '摄像头开启失败，请检查设备或浏览器权限')
+      : (backendSource.value ? `摄像头连接失败：${e.message}` : '摄像头开启失败，请检查设备或浏览器权限')
   } finally {
     starting.value = false
   }
@@ -309,6 +332,7 @@ async function pollSerialFrame(session) {
       await image.decode()
       if (disposed || session !== serialSession) return
       serialCapture = image
+      if (boardUsbSource.value) serialImage.value = result.data_url
       serialFrameId = result.frame_id
       serialFrameAt = frameAt
       cameraEnabled.value = true
@@ -329,10 +353,11 @@ async function pollSerialFrame(session) {
       serialImage.value = result.preview.data_url
       serialPreviewId = result.preview_id
       serialProgress.value = Math.round(result.preview.rows / result.preview.height * 100)
-    } else if (!result.preview_fresh) {
+    } else if (!result.preview_fresh && serialSource.value) {
       serialImage.value = ''
       serialProgress.value = 0
     }
+    if (boardUsbSource.value && !fresh) serialImage.value = ''
   } catch (e) {
     if (disposed || session !== serialSession) return
     stopCamera()
@@ -343,10 +368,10 @@ async function pollSerialFrame(session) {
 }
 
 function captureFrame() {
-  const video = serialSource.value ? serialCapture : videoRef.value
+  const video = backendSource.value ? serialCapture : videoRef.value
   if (!cameraEnabled.value || !video) return null
   // 断线/停帧时不把旧图再次用于人脸开门。
-  if (serialSource.value ? Date.now() - serialFrameAt >= 10000 : video.readyState < 2) return null
+  if (backendSource.value ? Date.now() - serialFrameAt >= 10000 : video.readyState < 2) return null
 
   const canvas = document.createElement('canvas')
   canvas.width = video.videoWidth || video.naturalWidth || 1280

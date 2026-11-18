@@ -259,6 +259,9 @@ async function runAssistantStream(conversation, assistantMessage, extraPayload =
       activeConversationId.value = conversation.id
     }
   })
+  if (!pendingConfirmation && !pendingClientTool && !assistantMessage.content.trim()) {
+    throw new Error('模型未返回回复正文，请检查网络认证、模型配置或最大 Token 限制后重试')
+  }
   if (pendingConfirmation) {
     await confirmDangerousTool(conversation, assistantMessage, pendingConfirmation)
   }

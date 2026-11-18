@@ -7,12 +7,16 @@ from unittest.mock import patch
 from agent import agent_service as agent, tools
 
 
-def response(name=None, arguments="{}", content="", reasoning=""):
+class StreamResponse(list):
+    headers = {"Content-Type": "text/event-stream; charset=utf-8"}
+
+
+def response(name=None, arguments="{}", content="", reasoning="", finish_reason=None):
     delta = {"content": content, "reasoning_content": reasoning}
     if name:
         delta["tool_calls"] = [{"index": 0, "id": "call_test", "type": "function",
                                 "function": {"name": name, "arguments": arguments}}]
-    return nullcontext([("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n").encode(), b"data: [DONE]\n"])
+    return nullcontext(StreamResponse([("data: " + json.dumps({"choices": [{"delta": delta, "finish_reason": finish_reason}]}) + "\n").encode(), b"data: [DONE]\n"]))
 
 
 class ToolTests(unittest.TestCase):
@@ -64,6 +68,42 @@ class StreamTests(unittest.TestCase):
             events = list(agent.chat_stream(self.messages))
             execute.assert_not_called()
             self.assertNotIn('confirm_required', [e['type'] for e in events])
+
+    def test_captive_portal_html_is_an_error_not_a_successful_empty_reply(self):
+        portal = StreamResponse([b'<html><meta http-equiv="refresh" content="arubalp=12345"></html>'])
+        portal.headers = {'Content-Type': 'text/html'}
+        with patch.object(agent, '_urlopen', return_value=nullcontext(portal)):
+            events = list(agent.chat_stream(self.messages))
+        self.assertEqual(events[-1]['type'], 'error')
+        self.assertIn('校园网认证', events[-1]['message'])
+        self.assertNotIn('done', [e['type'] for e in events])
+
+    def test_empty_and_reasoning_only_replies_do_not_expose_private_reasoning(self):
+        for finish in ['stop', 'length', None]:
+            with self.subTest(finish=finish), patch.object(agent, '_urlopen', return_value=response(reasoning='private-reasoning', finish_reason=finish)):
+                events = list(agent.chat_stream(self.messages))
+                self.assertEqual(events[-1]['type'], 'error')
+                self.assertNotIn('private-reasoning', json.dumps(events))
+                self.assertEqual('Token' in events[-1]['message'], finish == 'length')
+
+    def test_truncated_tools_and_broken_streams_never_execute_actions(self):
+        streams = [
+            response('control_device', '{"device_id":"door_main","action":"open"}', finish_reason='length'),
+            nullcontext(StreamResponse([b'data: {"choices":[{"delta":{"content":"partial"}}]}\n'])),
+            nullcontext(StreamResponse([b'data: invalid-json\n'])),
+            nullcontext(StreamResponse([b'data: {"error":{"message":"upstream overloaded"}}\n'])),
+        ]
+        for stream in streams:
+            with patch.object(agent, '_urlopen', return_value=stream), patch.object(agent, 'execute_tool') as execute:
+                events = list(agent.chat_stream(self.messages))
+                self.assertEqual(events[-1]['type'], 'error')
+                execute.assert_not_called()
+
+    def test_network_timeout_becomes_error_event(self):
+        with patch.object(agent, '_urlopen', side_effect=TimeoutError('timed out')):
+            events = list(agent.chat_stream(self.messages))
+        self.assertEqual(events[-1]['type'], 'error')
+        self.assertIn('超时', events[-1]['message'])
 
     def test_dangerous_request_only_proposes_confirmation(self):
         with patch.object(agent, '_urlopen', return_value=response('cleanup_logs', '{"source":"vision"}')), \

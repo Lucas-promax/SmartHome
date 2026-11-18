@@ -1,11 +1,11 @@
 import json
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from agent import agent_service
 from app.schemas import AgentChatRequest, AgentConversationUpdateRequest, AgentSettingsRequest, AlertSettingsRequest, DeviceControlRequest, FrontendLogRequest, HardwareEventRequest, LogCleanupRequest, LoginRequest, PersonUpdateRequest
-from app.schemas import SerialSettingsRequest, CameraConnectRequest
+from app.schemas import SerialSettingsRequest, CameraConnectRequest, UsbCameraConnectRequest
 from service.camera_service import camera
 from service.hardware_service import hardware
 from service import analysis_service, auth_service, home_service, log_service, person_service, vision_service
@@ -105,6 +105,21 @@ def configure_serial(payload: SerialSettingsRequest):
 def camera_ports():
     main_port = hardware.status()["port"]
     return ok([p for p in camera.ports() if p["port"] != main_port])
+
+
+@router.get("/camera/usb/devices")
+def usb_camera_devices():
+    return ok(camera.usb_devices())
+
+
+@router.post("/camera/usb/connect")
+def connect_usb_camera(payload: UsbCameraConnectRequest):
+    if payload.device not in {d["device"] for d in camera.usb_devices()}:
+        raise HTTPException(status_code=400, detail="板端 USB 摄像头不存在，请刷新设备")
+    try:
+        return ok(camera.connect_usb(payload.device))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/camera/connect")
@@ -277,8 +292,9 @@ def analysis_summary():
 
 
 @router.get("/analysis/overview")
-def analysis_overview(after: str | None = None, before: str | None = None, bucket_seconds: int | None = None):
-    return ok(analysis_service.overview(after, before, bucket_seconds))
+def analysis_overview(after: str | None = None, before: str | None = None, bucket_seconds: int | None = None,
+                      window_seconds: int | None = Query(default=None, ge=60, le=31 * 24 * 60 * 60)):
+    return ok(analysis_service.overview(after, before, bucket_seconds, window_seconds))
 
 
 @router.get("/analysis/sensors")

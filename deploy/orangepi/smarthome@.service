@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=%i
-SupplementaryGroups=dialout
+SupplementaryGroups=dialout video
 ExecStart=/usr/bin/bash /home/%i/SmartHome/deploy/current/deploy/orangepi/run.sh
 Restart=on-failure
 RestartSec=5

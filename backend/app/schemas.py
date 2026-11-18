@@ -112,5 +112,9 @@ class CameraConnectRequest(BaseModel):
     baudrate: Literal[115200, 250000, 500000, 1000000, 2000000] = 500000
 
 
+class UsbCameraConnectRequest(BaseModel):
+    device: str = Field(min_length=1, max_length=128)
+
+
 class AgentConversationUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=100)

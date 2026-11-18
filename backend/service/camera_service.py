@@ -1,5 +1,9 @@
-"""Independent OV7670 reader: progressive preview and separate complete JPEG."""
+"""Board USB / OV7670 capture with session-owned, fresh JPEG frames."""
 import base64
+import os
+from pathlib import Path
+import struct
+import sys
 import threading
 import time
 import uuid
@@ -14,8 +18,9 @@ from utils.ov7670_protocol import OV7670Parser
 class CameraService:
     FRESH_SECONDS = 10
 
-    def __init__(self, serial_factory=serial.Serial):
+    def __init__(self, serial_factory=serial.Serial, capture_factory=None):
         self._factory = serial_factory
+        self._capture_factory = capture_factory or cv2.VideoCapture
         self._lock = threading.RLock()
         self._lifecycle = threading.Lock()
         self._stop = threading.Event()
@@ -35,7 +40,50 @@ class CameraService:
     def ports():
         return [{"port": p.device, "description": p.description} for p in list_ports.comports()]
 
+    @staticmethod
+    def usb_devices():
+        if sys.platform != "linux":
+            return []
+        import fcntl
+
+        devices = []
+        for entry in sorted(Path("/sys/class/video4linux").glob("video*")):
+            # Only physical USB cameras; metadata-only nodes are not images.
+            if not any(part.startswith("usb") for part in (entry / "device").resolve().parts):
+                continue
+            device = f"/dev/{entry.name}"
+            try:
+                with open(device, "rb", buffering=0) as handle:
+                    capability = bytearray(104)
+                    fcntl.ioctl(handle.fileno(), 0x80685600, capability)  # VIDIOC_QUERYCAP
+                caps, device_caps = struct.unpack_from("II", capability, 84)
+                caps = device_caps if caps & 0x80000000 else caps
+                if not caps & (0x00000001 | 0x00001000):  # VIDEO_CAPTURE / MPLANE
+                    continue
+            except PermissionError:
+                # Still list the image node so missing permissions are actionable.
+                try:
+                    image_node = (entry / "index").read_text().strip() == "0"
+                except OSError:
+                    continue
+                if not image_node:
+                    continue
+            except OSError:
+                continue  # Unplugged while enumerating.
+            try:
+                devices.append({"device": device, "name": (entry / "name").read_text().strip(),
+                                "accessible": os.access(device, os.R_OK | os.W_OK)})
+            except OSError:
+                continue
+        return devices
+
     def connect(self, port, baudrate):
+        return self._start(self._run, (port, baudrate), port)
+
+    def connect_usb(self, device):
+        return self._start(self._run_usb, (device,))
+
+    def _start(self, target, args, port=""):
         with self._lifecycle:
             self._close()
             with self._lock:
@@ -43,7 +91,7 @@ class CameraService:
                 self.port = port
                 self.error = None
                 self._stop.clear()
-                self._thread = threading.Thread(target=self._run, args=(port, baudrate), daemon=True)
+                self._thread = threading.Thread(target=target, args=args, daemon=True)
                 self._thread.start()
                 return {"session": self.session}
 
@@ -52,7 +100,7 @@ class CameraService:
         if self._thread:
             self._thread.join(timeout=3)
             if self._thread.is_alive():
-                raise ValueError("摄像头串口尚未关闭，请稍后重试")
+                raise ValueError("摄像头尚未关闭，请稍后重试")
         with self._lock:
             self._thread = None
             self.connected = False
@@ -90,6 +138,44 @@ class CameraService:
         self._preview = {"data_url": image, "rows": rows, "height": height}
         self._preview_id += 1
         self._preview_at = time.monotonic()
+
+    def _run_usb(self, device):
+        capture = None
+        try:
+            if not os.access(device, os.R_OK | os.W_OK):
+                raise ValueError("无法访问板端 USB 摄像头，请确认设备已连接，并为后端服务添加 video 组权限")
+            capture = self._capture_factory(device, cv2.CAP_V4L2)
+            if not capture.isOpened():
+                raise ValueError("板端 USB 摄像头打开失败，请检查是否被其他程序占用")
+            # MJPEG reduces USB bandwidth. Drivers may negotiate another supported size.
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            capture.set(cv2.CAP_PROP_FPS, 10)
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            with self._lock:
+                self.connected = True
+            while not self._stop.is_set():
+                started = time.monotonic()
+                success, frame = capture.read()
+                if not success or frame is None:
+                    raise ValueError("板端 USB 摄像头读取失败，设备可能已断开，请刷新后重新开启")
+                image = self._jpeg(frame, 85)
+                if image and not self._stop.is_set():
+                    with self._lock:
+                        self._frame = image
+                        self._frame_id += 1
+                        self._at = time.monotonic()
+                self._stop.wait(max(0, 0.1 - (time.monotonic() - started)))
+        except Exception as exc:
+            with self._lock:
+                self.error = str(exc)
+        finally:
+            if capture is not None:
+                capture.release()
+            with self._lock:
+                self.connected = False
+                self._frame = None
 
     def _run(self, port, baudrate):
         try:

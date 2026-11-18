@@ -230,6 +230,16 @@ class ApiTests(unittest.TestCase):
                         return SimpleNamespace(status_code=messages[0]["status"], json=lambda: json.loads(body))
                     return asyncio.run(invoke())
             client = Client()
+            with patch.object(routers.camera, 'usb_devices', return_value=[
+                {'device': '/dev/video0', 'name': 'HD USB CAMERA', 'accessible': True}
+            ]), patch.object(routers.camera, 'connect_usb', return_value={'session': 'usb-session'}) as connect:
+                self.assertEqual(client.get('/api/camera/usb/devices').json()['data'][0]['device'], '/dev/video0')
+                for device in ['http://camera/stream', '/etc/passwd', '/dev/video1']:
+                    self.assertEqual(client.post('/api/camera/usb/connect', json={'device': device}).status_code, 400)
+                connect.assert_not_called()
+                self.assertEqual(client.post('/api/camera/usb/connect', json={'device': '/dev/video0'}).json()['data']['session'], 'usb-session')
+                connect.assert_called_once_with('/dev/video0')
+                self.assertEqual(client.post('/api/camera/usb/connect', json={}).status_code, 422)
             with patch.object(routers.hardware, 'status', return_value={'port': 'COM1'}), \
                  patch.object(routers.camera, 'ports', return_value=[{'port': 'COM1'}, {'port': 'COM2'}]):
                 self.assertEqual(client.get('/api/camera/ports').json()['data'], [{'port': 'COM2'}])
@@ -241,6 +251,106 @@ class ApiTests(unittest.TestCase):
                     self.assertEqual(response.json()['data']['session'], 'abc')
                     connect.assert_called_once_with('COM2', 500000)
                 self.assertEqual(client.get('/api/camera/frame?session=missing').status_code, 409)
+
+
+class UsbServiceTests(unittest.TestCase):
+    def wait_for(self, camera, session, predicate):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            result = camera.latest(session)
+            if predicate(result):
+                return result
+            time.sleep(0.01)
+        self.fail('Timed out waiting for USB capture')
+
+    def test_usb_frames_stop_switch_and_old_session_ownership(self):
+        captures = []
+
+        class Capture:
+            def __init__(self, device, backend):
+                self.device = device
+                self.released = False
+                captures.append(self)
+
+            def isOpened(self):
+                return True
+
+            def set(self, *args):
+                pass
+
+            def read(self):
+                return True, np.zeros((3, 4, 3), dtype=np.uint8)
+
+            def release(self):
+                self.released = True
+
+        camera = CameraService(capture_factory=Capture)
+        with patch('service.camera_service.os.access', return_value=True):
+            session = camera.connect_usb('/dev/video0')['session']
+            try:
+                result = self.wait_for(camera, session, lambda r: r['fresh'])
+                jpeg = base64.b64decode(result['data_url'].split(',')[1])
+                self.assertEqual(cv2.imdecode(np.frombuffer(jpeg, np.uint8), 1).shape, (3, 4, 3))
+                self.assertIsNone(camera.latest(session, result['frame_id'])['data_url'])
+                camera._at -= 11
+                self.assertIsNone(camera.latest(session)['data_url'])
+                replacement = camera.connect_usb('/dev/video2')['session']
+                self.assertTrue(captures[0].released)
+                with self.assertRaises(ValueError):
+                    camera.latest(session)
+                self.wait_for(camera, replacement, lambda r: r['fresh'])
+                camera.stop(session)
+                self.assertTrue(camera.latest(replacement)['connected'])
+            finally:
+                camera.stop()
+        self.assertTrue(all(c.released for c in captures))
+
+    def test_usb_unplug_clears_complete_frame_and_releases_device(self):
+        unplugged = threading.Event()
+        released = threading.Event()
+
+        class Capture:
+            def __init__(self, *args):
+                pass
+
+            def isOpened(self):
+                return True
+
+            def set(self, *args):
+                pass
+
+            def read(self):
+                return (False, None) if unplugged.is_set() else (True, np.zeros((2, 2, 3), dtype=np.uint8))
+
+            def release(self):
+                released.set()
+
+        camera = CameraService(capture_factory=Capture)
+        with patch('service.camera_service.os.access', return_value=True):
+            session = camera.connect_usb('/dev/video0')['session']
+            try:
+                self.wait_for(camera, session, lambda r: r['fresh'])
+                unplugged.set()
+                result = self.wait_for(camera, session, lambda r: r['error'])
+                self.assertFalse(result['connected'])
+                self.assertFalse(result['fresh'])
+                self.assertIsNone(result['data_url'])
+                self.assertTrue(released.is_set())
+            finally:
+                camera.stop()
+
+    def test_usb_permission_and_open_errors(self):
+        capture = SimpleNamespace(isOpened=lambda: False, release=lambda: None)
+        for accessible, error in [(False, 'video'), (True, '占用')]:
+            with patch('service.camera_service.os.access', return_value=accessible):
+                camera = CameraService(capture_factory=lambda *args: capture)
+                session = camera.connect_usb('/dev/video0')['session']
+                try:
+                    result = self.wait_for(camera, session, lambda r: r['error'])
+                    self.assertIn(error, result['error'])
+                    self.assertFalse(result['fresh'])
+                finally:
+                    camera.stop()
 
 
 if __name__ == '__main__':

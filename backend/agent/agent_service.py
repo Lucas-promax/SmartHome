@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import ssl
 import urllib.error
 import urllib.request
@@ -300,6 +301,21 @@ def _urlopen(request: urllib.request.Request, timeout: int):
     return urllib.request.urlopen(request, timeout=timeout, context=context)
 
 
+def _check_response_type(response, expected: str) -> None:
+    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    if content_type == expected:
+        return
+    if content_type in {"text/html", "application/xhtml+xml"}:
+        raise ValueError("Agent API 返回了 HTML 网页，未收到模型回复。请检查香橙派是否完成校园网认证，以及 API 地址是否正确")
+    raise ValueError(f"Agent API 响应格式错误（{content_type or '缺少 Content-Type'}），预期 {expected}")
+
+
+def _empty_reply_error(finish_reason: str | None) -> str:
+    if finish_reason == "length":
+        return "Agent 输出已达到最大 Token 限制，未生成完整回复；开启思考时需为思考和正文预留足够 Token，请调高最大 Token 或关闭思考后重试"
+    return "Agent 未返回回复正文或工具调用，请检查 API 服务和模型配置后重试"
+
+
 def _extract_delta(chunk: dict[str, Any]) -> str:
     choices = chunk.get("choices") or []
     if not choices:
@@ -381,18 +397,23 @@ def chat(messages: list[dict[str, str]]) -> dict[str, Any]:
     request = _request(settings, _build_payload(settings, messages))
     try:
         with _urlopen(request, timeout=settings["timeout_seconds"]) as response:
+            _check_response_type(response, "application/json")
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise ValueError(f"Agent 请求失败：HTTP {exc.code} {detail[:300]}") from exc
     except urllib.error.URLError as exc:
         raise ValueError(f"Agent 请求失败：{exc.reason}") from exc
+    except (OSError, http.client.HTTPException) as exc:
+        raise ValueError("Agent 网络连接中断或超时，请检查网络后重试") from exc
 
     choices = result.get("choices") or []
     if not choices:
         raise ValueError("Agent 未返回有效回复")
     message = choices[0].get("message") or {}
     content = message.get("content") or ""
+    if not content.strip():
+        raise ValueError(_empty_reply_error(choices[0].get("finish_reason")))
     return {
         "message": {"role": "assistant", "content": content},
         "model": result.get("model", settings["model"]),
@@ -444,8 +465,11 @@ def chat_stream(messages: list[dict[str, Any]], confirmed_tool: dict[str, Any] |
         content_chunks: list[str] = []
         reasoning_chunks: list[str] = []
         tool_calls: list[dict[str, Any]] = []
+        finish_reason = None
+        finished = False
         try:
             with _urlopen(request, timeout=settings["timeout_seconds"]) as response:
+                _check_response_type(response, "text/event-stream")
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or line.startswith(":"):
@@ -454,12 +478,20 @@ def chat_stream(messages: list[dict[str, Any]], confirmed_tool: dict[str, Any] |
                         continue
                     data = line[5:].strip()
                     if data == "[DONE]":
+                        finished = True
                         break
                     try:
                         chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
+                    except json.JSONDecodeError as exc:
+                        raise ValueError("Agent 流式响应不是有效 JSON，请检查 API 服务或网络") from exc
+                    if chunk.get("error"):
+                        error = chunk["error"]
+                        detail = error.get("message", "未知错误") if isinstance(error, dict) else str(error)
+                        raise ValueError(f"Agent API 返回错误：{detail}")
                     choices = chunk.get("choices") or []
+                    if choices and choices[0].get("finish_reason") is not None:
+                        finish_reason = choices[0]["finish_reason"]
+                        finished = True
                     delta_obj = (choices[0].get("delta") if choices else {}) or {}
                     # Thinking 工具续接需要回传该字段；仅在本次后端循环内保留，不发送前端。
                     if delta_obj.get("reasoning_content"):
@@ -477,8 +509,23 @@ def chat_stream(messages: list[dict[str, Any]], confirmed_tool: dict[str, Any] |
         except urllib.error.URLError as exc:
             yield {"type": "error", "message": f"Agent 请求失败：{exc.reason}"}
             return
+        except ValueError as exc:
+            yield {"type": "error", "message": str(exc)}
+            return
+        except (OSError, http.client.HTTPException):
+            yield {"type": "error", "message": "Agent 网络连接中断或超时，请检查网络后重试"}
+            return
 
+        if not finished:
+            yield {"type": "error", "message": "Agent 流式连接提前结束，回复可能不完整，请重试"}
+            return
+        if finish_reason == "length":
+            yield {"type": "error", "message": _empty_reply_error(finish_reason)}
+            return
         if not tool_calls:
+            if not "".join(content_chunks).strip():
+                yield {"type": "error", "message": _empty_reply_error(finish_reason)}
+                return
             yield {"type": "done"}
             return
 
